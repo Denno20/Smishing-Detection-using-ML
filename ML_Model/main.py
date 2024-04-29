@@ -11,6 +11,7 @@ def main():
 
 
     outcome = model.predict_sms(predict_msg=predict_msg)
+    print("Hello world")
     print(outcome)
 
 
