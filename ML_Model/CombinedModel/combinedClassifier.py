@@ -3,6 +3,7 @@
 # https://www.kaggle.com/code/llabhishekll/text-preprocessing-and-sms-spam-detection/notebook
 
 #Import required libraries
+from sklearn.metrics import f1_score, confusion_matrix,accuracy_score, classification_report
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB, BernoulliNB
 from sklearn.model_selection import train_test_split
@@ -13,7 +14,6 @@ from sklearn.ensemble import AdaBoostClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import VotingClassifier
 from nltk.stem import WordNetLemmatizer
-from sklearn.metrics import f1_score
 from nltk.corpus import stopwords
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
@@ -32,6 +32,7 @@ nltk.download('wordnet')
 #Define the lemmatizer
 lemmatizer = WordNetLemmatizer()
 stopset = list(set(stopwords.words("english")))
+random_state = 42
 
 class CombinedClassifier:
     def __init__(self):
@@ -39,11 +40,11 @@ class CombinedClassifier:
         self.vectorizer = TfidfVectorizer(stop_words=stopset)
         #Define the classifiers that will be used in the voting classifier
         self.A = MultinomialNB(alpha=1.0,fit_prior=False)
-        self.B = AdaBoostClassifier(n_estimators=100)
-        self.C = RandomForestClassifier(n_estimators=100)
-        self.D = MLPClassifier(early_stopping=True, batch_size=128, verbose=False)
+        self.B = AdaBoostClassifier(n_estimators=100,random_state=random_state)
+        self.C = RandomForestClassifier(n_estimators=100,random_state=random_state)
+        self.D = MLPClassifier(early_stopping=True, batch_size=128, verbose=False,random_state=random_state)
         self.E = BernoulliNB(alpha=1.0, fit_prior=False)
-        self.F = DecisionTreeClassifier()
+        self.F = DecisionTreeClassifier(random_state=random_state)
         self.classifiers = [self.A,self.B,self.C,self.D,self.E, self.F]
         self.objects = ('MultiNB', 'ADB', 'RF', 'MLP', 'BNB', 'DT')
 
@@ -94,7 +95,7 @@ class CombinedClassifier:
 
 
     #Function to save the model which is called after training
-    def save_model(self)
+    def save_model(self):
         #Ask if the user wants to save the model
         c = input("Save model? Y/N").upper()
         if c == "Y":
@@ -119,7 +120,7 @@ class CombinedClassifier:
         self.legitimate = data[data["Class"] == 0]
         self.smishing = data[data["Class"] == 1]
         #Sample the legitimate list to the same size as the smishing list
-        self.legitimate = self.legitimate.sample(n=len(self.smishing))
+        self.legitimate = self.legitimate.sample(n=len(self.smishing), random_state=random_state)
         data = self.get_balanced_data()
 
 
@@ -162,7 +163,7 @@ class CombinedClassifier:
         y = data.Class
 
         #Split the training data into a 80:20 split
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, train_size=0.80)
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, train_size=0.80,random_state=random_state)
         cv_score = []
 
         #Weight calculation borrowed from tutorial
@@ -186,7 +187,8 @@ class CombinedClassifier:
         ], 
         voting='soft', 
         weights=weights,
-        verbose=True  
+        verbose=True,
+        n_jobs=1,
         )
 
         #F1 calculation code borrowed from tutorial
@@ -214,6 +216,29 @@ class CombinedClassifier:
         plt.ylabel('Accuracy Score')
         plt.title('Accuracy of Models')
         plt.show()
+
+        print(classification_report(y_pred,y_test))
+
+
+        # plt.title('Voting Classifier \nAccuracy:{0:.3f}'.format(accuracy_score(y_test, y_pred)))
+
+
+        # Creates a confusion matrix
+        cm = confusion_matrix(y_pred,y_test)
+        print(accuracy_score(y_test, y_pred))
+
+        # Transform to df for easier plotting
+        cm_df = pd.DataFrame(cm,
+                            index=['TP', 'FP'],
+                            columns=['FN', 'TN'])
+
+        plt.figure(figsize=(5.5,4))
+        sns.heatmap(cm_df, annot=True,fmt='g')
+        plt.title('Voting Classifier - public dataset only')
+        plt.ylabel('Predicted class')
+        plt.xlabel('Actual class')
+        plt.show()
+
         
         #Train the voting classifier
         self.votingClassifier.fit(X_train, y_train)
@@ -241,3 +266,20 @@ class CombinedClassifier:
         #Assign a label to the prediction based on the threshold of 0.5
         class_predictions = [("smish", p[1]) if p[1] > 0.5 else ("ham", p[1]) for p in predictions]
         return class_predictions
+
+    def predict_classes_only(self, sample_messages):
+        # Transform the sample dataset
+        corpus = []
+
+        #Pre-process the input data
+        for i in range(0, len(sample_messages)):
+            message = re.sub('[^a-zA-Z]', ' ', sample_messages[i])
+            message = self.standardise_text(message)
+            corpus.append(message)
+
+        # Extract feature column 'Text'
+        sample_features = self.vectorizer.transform(corpus).toarray()
+
+        # Perform classification on the sample dataset
+
+        return self.votingClassifier.predict(sample_features)
