@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 import numpy as np
+import warnings
 import joblib
 import string
 import nltk
@@ -28,6 +29,7 @@ import re
 #Download stop words if needed
 nltk.download('stopwords')
 nltk.download('wordnet')
+warnings.filterwarnings("ignore")
 
 #Define the lemmatizer
 lemmatizer = WordNetLemmatizer()
@@ -60,10 +62,6 @@ class CombinedClassifier:
     def predict_labels(self, clf, features):
         return(clf.predict(features))
 
-        # Preprocess the new data
-    def preprocess_new_data(self, new_data):
-        preprocessed_data = new_data.apply(self.standardise_text)
-        return preprocessed_data
 
     # Predict labels for the new data
     def predict_new_data(self, clf, X_new):
@@ -109,27 +107,29 @@ class CombinedClassifier:
         balanced_data['Class']=balanced_data['Label'].map({'ham':0,'smish':1})
         print(f"The length of balanced data {len(balanced_data)}")
         return balanced_data
-
-    def train(self):
-        data = self.data
-
+    
+    def label_encoder(self, data):
         #Convert label to numerical variable
         data["Class"] = data["Label"].map({'ham':0, 'smish': 1})
 
         #Get 2 class lists
         self.legitimate = data[data["Class"] == 0]
         self.smishing = data[data["Class"] == 1]
+
+    
+    def balance_data(self):
         #Sample the legitimate list to the same size as the smishing list
         self.legitimate = self.legitimate.sample(n=len(self.smishing), random_state=random_state)
-        data = self.get_balanced_data()
-
-
-        print(data.info())
+        return self.get_balanced_data()
+    
+    def plot_balanced_data(self, data):
         sns.countplot(data.Label)
         plt.xlabel('Balanced Data')
         plt.title('Number of ham and smish texts')
         plt.show()
 
+        # Preprocess the new data
+    def get_tfidf_corpus(self, data):
         # Define an empty list
         corpus = []
 
@@ -138,14 +138,11 @@ class CombinedClassifier:
             message = data.Text[i]
             message = self.standardise_text(message)
             corpus.append(message)
+        
+        return corpus
+    
 
-        # Extract feature column 'Text'
-        X = self.vectorizer.fit_transform(corpus).toarray()
-
-
-        # Get the feature names
-        feature_names = self.vectorizer.get_feature_names_out() 
-
+    def create_word_cloud(self,feature_names, X):
         # Get a dictionary using the feature names
         word_scores = dict(zip(feature_names, X.sum(axis=0).tolist()))
 
@@ -158,26 +155,26 @@ class CombinedClassifier:
         plt.axis("off")
         plt.show()
 
-
-        # Extract target column 'Class'
-        y = data.Class
-
+    def split_training_data(self, X, y):
         #Split the training data into a 80:20 split
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, train_size=0.80,random_state=random_state)
+        return train_test_split(X, y, test_size=0.20, train_size=0.80,random_state=random_state)
+    
+    def get_cv_score_data(self, X_train, y_train):
         cv_score = []
-
         #Weight calculation borrowed from tutorial
         #Calculate the cross value scores for each classifier, used to assign a weight to each classifier
         for c in self.classifiers:
             scores = cross_val_score(c, X_train, y_train, cv=5, scoring='accuracy')
             cv_score.append(scores.mean())
-
-        #Calculate weights which give a "priority" to stronger classifiers
-        total_score = sum(cv_score)
-        weights = [score / total_score for score in cv_score]
         
-        #Create the voting classsifier
-        self.votingClassifier = VotingClassifier(estimators=[
+        return cv_score
+
+    def calculate_cv_score_weights(self, cv_score):
+        #Calculate weights which give a "priority" to stronger classifiers
+        return [score / sum(cv_score) for score in cv_score]
+
+    def create_voting_classifier(self,weights):
+        return VotingClassifier(estimators=[
         ('NB', self.A),
         ('ABC', self.B),
         ('RF', self.C),
@@ -190,10 +187,11 @@ class CombinedClassifier:
         verbose=True,
         n_jobs=1,
         )
-
+    
+    def calculate_f1_scores(self, X_train, y_train, X_test, y_test):
         #F1 calculation code borrowed from tutorial
         #Default values for all classifiers are 0
-        pred_val = [0,0,0,0,0,0]
+        f1_scores_list = [0,0,0,0,0,0]
 
         #It isn't necessary to train each classifier individually
         #to fit the voting classifier, this is just to show the F1 score
@@ -205,9 +203,12 @@ class CombinedClassifier:
             self.train_classifier(self.classifiers[a], X_train, y_train)
             y_pred = self.predict_labels(self.classifiers[a],X_test)
             #Calcuate the F1 score
-            pred_val[a] = f1_score(y_test, y_pred) 
-            print(pred_val[a])
+            f1_scores_list[a] = f1_score(y_test, y_pred) 
+            print(f1_scores_list[a])
+        
+        return f1_scores_list, y_pred
 
+    def plot_accuracy_graph(self, pred_val):
         #Plot data for F1 Score
         y_pos = np.arange(len(self.objects))
         y_val = [ x for x in pred_val]
@@ -217,12 +218,11 @@ class CombinedClassifier:
         plt.title('Accuracy of Models')
         plt.show()
 
+
+    def print_classification_report(self, y_pred, y_test):
         print(classification_report(y_pred,y_test))
 
-
-        # plt.title('Voting Classifier \nAccuracy:{0:.3f}'.format(accuracy_score(y_test, y_pred)))
-
-
+    def show_confusion_matrix(self, y_pred,y_test):
         # Creates a confusion matrix
         cm = confusion_matrix(y_pred,y_test)
         print(accuracy_score(y_test, y_pred))
@@ -239,9 +239,32 @@ class CombinedClassifier:
         plt.xlabel('Actual class')
         plt.show()
 
-        
+    def train(self):
+        data = self.data
+        self.label_encoder(data)
+        data = self.balance_data()
+        corpus = self.get_tfidf_corpus(data)
+        # Extract feature column 'Text'
+        X = self.vectorizer.fit_transform(corpus).toarray()
+        # Get the feature names
+        feature_names = self.vectorizer.get_feature_names_out() 
+        # Extract target column 'Class'
+        y = data.Class
+        X_train, X_test, y_train, y_test = self.split_training_data(X,y)
+        cv_score = self.get_cv_score_data(X_train, y_train)
+        weights = self.calculate_cv_score_weights(cv_score)
+        #Create the voting classsifier
+        self.votingClassifier = self.create_voting_classifier(weights)
+        pred_val, y_pred = self.calculate_f1_scores(X_train, y_train, X_test, y_test)
+
         #Train the voting classifier
         self.votingClassifier.fit(X_train, y_train)
+
+        self.create_word_cloud(feature_names,X)
+        self.plot_balanced_data(data)
+        self.plot_accuracy_graph(pred_val)
+        self.print_classification_report(y_pred, y_test)
+        self.show_confusion_matrix(y_pred,y_test)
 
         #Save the model
         self.save_model()
